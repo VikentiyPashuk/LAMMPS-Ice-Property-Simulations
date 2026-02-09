@@ -1,0 +1,82 @@
+# ============================================================
+# LAMMPS input script for ReaxFF ice equilibration at 100 K
+# Purpose:
+#   - Get density of ice substrate
+# Units: real (kcal/mol, fs, Angstroms, atm)
+# ============================================================
+
+# -------------------------
+# Simulation variables
+# -------------------------
+variable temp equal 100                 # Target temperature (K)
+variable dt equal 0.25                  # Timestep (fs)
+variable tempDamp equal ${dt}*100.0    # Thermostat damping
+variable pressure equal 0               # Target pressure (atm)
+variable pressureDamp equal ${dt}*1000.0 # Barostat damping (~1 ps)
+
+# -------------------------
+# Initialize simulation
+# -------------------------
+units real
+atom_style full
+
+# Read in quenched ReaxFF ice structure
+read_data after_quench_80ps_100K_ReaxFF.data
+
+# -------------------------
+# Output frequency
+# -------------------------
+variable out_freq_thermo equal 1000     # Print thermo every 1000 steps
+
+timestep ${dt}
+
+# -------------------------
+# Neighbor list settings
+# -------------------------
+neighbor 2.0 bin
+neigh_modify every 2 delay 2 check yes
+
+# -------------------------
+# ReaxFF potential
+# -------------------------
+pair_style reax/c NULL checkqeq yes
+pair_coeff * * albitereax.ff.txt H O
+fix 21 all qeq/reax 1 0.0 10.0 1.0e-6 reax/c
+
+# -------------------------
+# Energy minimization
+# -------------------------
+min_style cg
+minimize 1e-8 1e-8 100000 100000     # Conjugate gradient minimization for relaxation
+
+reset_timestep 0
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+# Store thermo variables for printing
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+
+# -------------------------
+# Print density to file
+# -------------------------
+fix 44 all print 100 "${step_sim} ${press_sim} ${density_sim}" file density-100k-80ps-a-ff.txt screen no
+
+# -------------------------
+# NPT equilibration
+# -------------------------
+fix 4 all npt temp ${temp} ${temp} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+# -------------------------
+# Run the equilibration
+# -------------------------
+run 2000000 (500 ps)
+
+# ============================================================
+# End of simulation
+# ============================================================

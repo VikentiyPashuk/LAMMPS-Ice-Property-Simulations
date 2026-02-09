@@ -1,0 +1,102 @@
+# ============================================================
+#  LAMMPS input script for ice compression at 245 K
+#  Purpose: Isothermal compressibility study using TIP4P/Ice
+#           Measures volume fluctuations under constant temperature
+#           at varying pressures (press_set)
+#  LAMMPS version: 2 Aug 2023 (Update 3)
+# ============================================================
+
+# -------------------------
+# Initialize Simulation
+# -------------------------
+units           real            # Real units (kcal/mol, fs, angstroms)
+dimension       3               # 3D simulation box
+boundary        p p p           # Periodic boundaries in all directions
+atom_style      full            # Full atom style (needed for TIP4P water)
+
+# -------------------------
+# Read initial configuration
+# -------------------------
+read_data       tip3p.data      # TIP4P/Ice water initial structure
+
+# -------------------------
+# Define simulation variables
+# -------------------------
+variable dt equal 2               # Timestep in fs
+variable temp_fix equal 245.0     # Target temperature (K)
+variable nsteps equal 5000000     # Total number of steps (10 ns)
+variable tdamp equal 100          # Thermostat damping steps
+variable pdamp equal 1000         # Barostat damping steps
+variable tdamp_fix equal ${dt}*${tdamp}  # Thermostat damping in fs
+variable pdamp_fix equal ${dt}*${pdamp}  # Barostat damping in fs
+
+log log_compress_${press_set}.lammps   # Log file for this simulation
+timestep ${dt}
+
+# -------------------------
+# Neighbor list settings
+# -------------------------
+neigh_modify delay 7 every 1       # Neighbor list update: first 7 steps delayed, updated every step
+
+# -------------------------
+# TIP4P/Ice water interactions
+# -------------------------
+# Create atom groups
+group ox type 2                     # Oxygen atoms
+group hy type 1                     # Hydrogen atoms
+
+# Set partial charges for TIP4P water model
+set group ox charge -1.1794
+set group hy charge 0.5897
+
+# TIP4P potential parameters
+pair_style lj/cut/tip4p/long 2 1 1 1 0.1577 8.5
+pair_coeff 1 1*2 0.000 0.000
+pair_coeff 2 2 0.21084 3.1668
+bond_style harmonic
+bond_coeff 1 450 0.9572
+angle_style harmonic
+angle_coeff 1 55 104.52
+kspace_style pppm/tip4p 1.0e-4     # Long-range electrostatics
+pair_modify tail yes                # Apply tail corrections
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo_style custom step temp density pe ke etotal press vol
+thermo 100                          # Print thermo output every 100 steps
+
+# -------------------------
+# Dump atomic positions
+# -------------------------
+dump 1 all custom 10000 iso_${press_set}.dump id type x y z element
+dump_modify 1 element H O           # Label hydrogen and oxygen in dump
+
+# -------------------------
+# NPT Equilibration
+# -------------------------
+# Apply NPT ensemble at constant temperature (temp_fix)
+# and isotropic pressure (press_set) Pressure is set from the batch script command
+fix 1 all npt temp ${temp_fix} ${temp_fix} ${tdamp_fix} iso ${press_set} ${press_set} ${pdamp_fix}
+
+# Variables for printing selected thermo properties
+variable step_sim equal step
+variable temp_sim equal temp
+variable press_sim equal press
+variable vol_sim equal vol
+
+# Print selected thermo properties to file
+fix 44 all print 100 "${step_sim} ${temp_sim} ${press_sim} ${vol_sim}" \
+file isothermal_compress_${press_set}.txt screen no
+
+# -------------------------
+# Run the simulation
+# -------------------------
+run ${nsteps}
+
+# -------------------------
+# Clean up after simulation
+# -------------------------
+undump 1          # Stop dumping atomic positions
+unfix 1           # Remove NPT fix
+unfix 44          # Remove thermo print fix

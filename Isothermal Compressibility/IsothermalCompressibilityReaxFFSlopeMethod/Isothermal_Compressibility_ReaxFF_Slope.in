@@ -1,0 +1,88 @@
+# ============================================================
+#  LAMMPS input script for ice compression at 245 K
+#  LAMMPS version: 2 Aug 2023 (Update 3)
+#
+#  Workflow:
+#   1) Read initial ice structure
+#   2) Equilibrate at 245 K under user-defined pressure
+#   3) Output thermodynamic data and atomic positions
+# ============================================================
+
+# -------------------------
+# Initialize simulation
+# -------------------------
+units           real            # Use real units (fs, kcal/mol, angstroms)
+dimension       3               # 3D simulation box
+boundary        p p p           # Periodic boundary conditions in all directions
+atom_style      full            # Full atom style for ReaxFF
+
+# -------------------------
+# Read initial structure
+# -------------------------
+read_data       reaxff_ice_1300.data   # Pre-prepared ice structure
+
+# -------------------------
+# Define simulation variables
+# -------------------------
+variable dt equal 0.25                  # Timestep in fs
+variable temp_fix equal 245.0           # Target temperature for NPT equilibration (K)
+variable nsteps equal 800000            # Number of simulation steps (200 ps)
+variable tdamp equal 100                # Thermostat steps
+variable pdamp equal 1000               # Barostat steps
+variable tdamp_fix equal ${dt}*${tdamp}  # Thermostat damping in fs
+variable pdamp_fix equal ${dt}*${pdamp}  # Barostat damping in fs
+
+log log_compress_${press_set}.lammps   # Log file for simulation
+
+timestep ${dt}
+
+# -------------------------
+# Define interatomic interactions
+# -------------------------
+neighbor 2.0 bin                        # Neighbor list cutoff
+neigh_modify delay 2 every 1            # Neighbor list update frequency
+
+# ReaxFF force field
+pair_style reax/c NULL checkqeq yes
+pair_coeff * * albitereax.ff.txt H O
+fix 21 all qeq/reax 1 0.0 10.0 1.0e-6 reax/c   # Charge equilibration fix
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo_style custom step temp density pe ke etotal press vol
+thermo 100                              # Output every 100 steps
+
+# -------------------------
+# Create dump files for visualization
+# -------------------------
+dump 1 all custom 10000 iso_${press_set}.dump id type x y z element
+dump_modify 1 element H O               # Label H and O in dump file
+
+# -------------------------
+# NPT equilibration at target temperature and pressure
+# Read the pressure from the batch script
+# -------------------------
+fix 1 all npt temp ${temp_fix} ${temp_fix} ${tdamp_fix} iso ${press_set} ${press_set} ${pdamp_fix}
+
+# Variables for printing
+variable step_sim equal step
+variable temp_sim equal temp
+variable press_sim equal press
+variable vol_sim equal vol
+
+# Print selected thermo variables to file during NPT
+# Record pressure and volume values at a given pressure.
+fix 44 all print 100 "${step_sim} ${temp_sim} ${press_sim} ${vol_sim}" file isothermal_compress_${press_set}.txt screen no
+
+# -------------------------
+# Run the simulation
+# -------------------------
+run ${nsteps}
+
+# -------------------------
+# Clean up
+# -------------------------
+undump 1
+unfix 1
+unfix 44

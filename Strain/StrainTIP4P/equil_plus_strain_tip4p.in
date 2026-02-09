@@ -1,0 +1,130 @@
+# ============================================================
+# LAMMPS input script for TIP4P/Ice crystal equilibration and uniaxial deformation
+# Purpose: 
+#   1. Equilibrate ice crystal at a given temperature.
+#   2. Perform uniaxial deformation in the y-direction (001) to study stress-strain response.
+# LAMMPS version: 2 Aug 2023 (Update 3)
+# Units: real (kcal/mol, fs, Angstroms)
+# ============================================================
+
+# -------------------------
+# Simulation variables
+# -------------------------
+variable temperature equal 264         # Target temperature for equilibration (K)
+variable equal_steps equal 500000     # Number of steps for NPT equilibration (1 ns)
+variable n_iter equal 2000000         # Number of steps for deformation  (12 ns)
+variable dt equal 2                    # Time step in fs
+variable tempDamp equal ${dt}*100.0   # Thermostat damping
+variable pressure equal 0              # Target pressure (atm)
+variable pressureDamp equal ${dt}*1000.0 # Barostat damping (1 ps)
+variable seed equal 385938             # Random seed for velocity initialization
+
+# -------------------------
+# Initialize simulation
+# -------------------------
+units real
+atom_style full
+read_data tip3p_crystal_ice.data       # Initial crystal ice configuration
+
+variable out_freq_thermo equal 10000
+variable out_freq_dump equal 10000
+
+timestep ${dt}
+neigh_modify delay 7 every 1           # Neighbor list settings
+
+# -------------------------
+# TIP4P/Ice water model
+# -------------------------
+group ox type 2                        # Oxygen atoms
+group hy type 1                        # Hydrogen atoms
+
+set group ox charge -1.1794
+set group hy charge 0.5897
+
+# TIP4P potential parameters
+pair_style lj/cut/tip4p/long 2 1 1 1 0.1577 8.5
+pair_coeff 1 1*2 0.000 0.000
+pair_coeff 2 2 0.21084 3.1668
+bond_style harmonic
+bond_coeff 1 450 0.9572
+angle_style harmonic
+angle_coeff 1 55 104.52
+kspace_style pppm/tip4p 1.0e-4
+pair_modify tail yes
+
+reset_timestep 0
+
+# -------------------------
+# Thermo and dump output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+# Dump positions and velocities during equilibration
+dump myDump all custom ${out_freq_dump} equilibration_${temperature}.dump x y z vx vy vz type id element
+dump_modify myDump append yes
+dump_modify myDump element H O
+
+# -------------------------
+# Equilibration with NPT
+# -------------------------
+fix 1 all shake 1e-6 200 0 b 1 a 1     # SHAKE constraints for water bonds and angles
+fix 4 all npt temp ${temperature} ${temperature} ${tempDamp} aniso ${pressure} ${pressure} ${pressureDamp}  # Anisotropic NPT
+
+velocity all create ${temperature} ${seed} dist gaussian  # Assign initial velocities
+
+run ${equal_steps}                      # Run equilibration
+
+# Clean up
+unfix 4
+undump myDump
+# Note: unfix 444 and 44 are present but not defined, likely safe to remove or placeholders
+
+# -------------------------
+# Set up for deformation
+# -------------------------
+
+dump myDump all custom ${out_freq_dump} tip4p_deform_${temperature}.dump x y z vx vy vz type id element
+dump_modify myDump append yes
+dump_modify myDump element H O
+
+reset_timestep 0
+
+# Store initial box length for strain calculation
+variable tmp equal "ly"
+variable L0 equal ${tmp}
+print "Initial Length, L0: ${L0}"
+
+compute peratom all pe/atom              # Compute per-atom potential energy
+
+# -------------------------
+# DEFORMATION
+# -------------------------
+fix 2 all npt temp ${temperature} ${temperature} 100.0 x 0 0 1000.0 z 0 0 1000.0  # Keep x and z fixed, y can change
+variable srate equal 5.0e7
+variable srate1 equal "v_srate/1.0e15"  # Convert to Angstrom/fs
+
+fix 3 all deform 1 y erate ${srate1} units box remap v  # Apply uniaxial strain in y-direction
+
+# -------------------------
+# Output strain and stress
+# -------------------------
+# Convert pressure from atm to GPa: 1 atm = 1/10132.5 GPa
+variable strain equal "(ly- v_L0)/v_L0"
+variable p1 equal "v_strain"
+variable p2 equal "-pxx/10132.5"
+variable p3 equal "-pyy/10132.5"
+variable p4 equal "-pzz/10132.5"
+
+fix def1 all print 10 "${p1} ${p2} ${p3} ${p4}" file genice_tens_tip4p_${temperature}.txt screen no
+
+# Display selected thermo info
+thermo 1000
+thermo_style custom step v_strain temp v_p2 v_p3 v_p4 ke pe press
+
+run ${n_iter}                           # Run deformation
+
+# -------------------------
+# Simulation done
+# -------------------------
+print "All done"

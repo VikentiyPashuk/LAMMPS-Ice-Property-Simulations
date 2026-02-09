@@ -1,0 +1,100 @@
+# ============================================================
+# LAMMPS input script for TIP4P/Ice equilibration at 100 K
+# Purpose:
+#   - Sample density of ice substrate
+# Units: real (kcal/mol, fs, Angstroms, atm)
+# ============================================================
+
+# -------------------------
+# Simulation variables
+# -------------------------
+variable temp equal 100                 # Target temperature (K)
+variable dt equal 2                     # Timestep (fs)
+variable tempDamp equal ${dt}*100.0    # Thermostat damping
+variable pressure equal 0               # Target pressure (atm)
+variable pressureDamp equal ${dt}*1000.0 # Barostat damping (~1 ps)
+
+# -------------------------
+# Initialize simulation
+# -------------------------
+units real
+atom_style full
+
+# Read in quenched ice configuration
+read_data after_quench_80ps_100K_TIP4P.data
+
+# -------------------------
+# Output frequency variables
+# -------------------------
+variable out_freq_thermo equal 1000     # Print thermo every 1000 steps
+
+timestep ${dt}
+
+# -------------------------
+# Neighbor list settings
+# -------------------------
+neigh_modify delay 7 every 1
+
+# -------------------------
+# TIP4P/Ice potential
+# -------------------------
+
+# Define atom groups for O and H
+group ox type 2
+group hy type 1
+
+# Set partial charges
+set group ox charge -1.1794
+set group hy charge 0.5897
+
+# Lennard-Jones + long-range electrostatics
+pair_style lj/cut/tip4p/long 2 1 1 1 0.1577 8.5
+pair_coeff 1 1*2 0.000 0.000
+pair_coeff 2 2 0.21084 3.1668
+
+# Bond and angle potentials
+bond_style harmonic
+bond_coeff 1 450 0.9572
+angle_style harmonic
+angle_coeff 1 55 104.52
+
+# Long-range electrostatics using PPPM for TIP4P
+kspace_style pppm/tip4p 1.0e-4
+pair_modify tail yes
+
+reset_timestep 0
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+# Store thermodynamic variables for printing
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+
+# -------------------------
+# Print density to file
+# -------------------------
+fix 44 all print 100 "${step_sim} ${press_sim} ${density_sim}" file density-100k-80ps-a.txt screen no
+
+# -------------------------
+# SHAKE for water rigidity
+# -------------------------
+fix 1 all shake 1e-6 200 0 b 1 a 1
+
+# -------------------------
+# NPT equilibration
+# -------------------------
+fix 4 all npt temp ${temp} ${temp} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+# -------------------------
+# Run the equilibration
+# -------------------------
+run 5000000 (10 ns)
+
+# ============================================================
+# End of simulation
+# ============================================================

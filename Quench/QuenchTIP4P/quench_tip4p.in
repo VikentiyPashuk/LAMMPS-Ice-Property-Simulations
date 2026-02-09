@@ -1,0 +1,125 @@
+# ============================================================
+#  LAMMPS version: 2 Aug 2023 (Update 3)
+#  Quenching Amorphous Water / Ice
+#  Protocol:
+#   1) Gradual temperature quench from 220 K → 100 K
+#   2) NPT relaxation after quench
+#   3) Save final equilibrated amorphous ice structure
+# ============================================================
+
+# -------------------------
+# User-defined variables
+# -------------------------
+variable temp_initial equal 220             # Initial temperature before quench (K)
+variable temp_final equal 100               # Target temperature after quench (K)
+variable dt equal 2                         # Timestep (fs)
+variable step_quench equal 40000            # Steps for post-quench equilibration (80 ps)
+variable step_after_quench equal 1000000    # Steps for quench run itself (2 ns)
+variable tempDamp equal 100.0               # Thermostat damping (fs)
+variable pressure equal 0                   # Target pressure (atm)
+variable pressureDamp equal 1000.0          # Barostat damping (fs) = 1 ps
+variable seed equal 385938                  # RNG seed for velocities
+
+# -------------------------
+# LAMMPS setup
+# -------------------------
+units real
+atom_style full
+
+# Read starting amorphous water structure at 220 K
+read_data tip4p_amorphous_glass_220K.data
+
+variable out_freq_thermo equal 1000         # Thermo output frequency
+variable out_freq_dump equal 100            # Dump frequency (unused here)
+
+timestep ${dt}
+
+neigh_modify delay 7 every 1                # Neighbor list settings
+
+# -------------------------
+# Atom groups for TIP4P/Ice
+# -------------------------
+group ox type 2                              # Oxygen atoms
+group hy type 1                              # Hydrogen atoms
+
+# -------------------------
+# Set partial charges for TIP4P
+# -------------------------
+set group ox charge -1.1794
+set group hy charge 0.5897
+
+# -------------------------
+# TIP4P force field
+# -------------------------
+pair_style lj/cut/tip4p/long 2 1 1 1 0.1577 8.5
+pair_coeff 1 1*2 0.000 0.000                # H-H and H-O Lennard-Jones (none)
+pair_coeff 2 2 0.21084 3.1668               # O-O Lennard-Jones
+bond_style harmonic
+bond_coeff 1 450 0.9572                     # O-H bond
+angle_style harmonic
+angle_coeff 1 55 104.52                     # H-O-H angle
+kspace_style pppm/tip4p 1.0e-2              # Long-range electrostatics
+pair_modify tail yes
+
+reset_timestep 0
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+variable pe_sim equal pe
+
+# Print key thermo data to file
+fix 44 all print 10000 "${step_sim} ${press_sim} ${density_sim} ${pe_sim}" file quench_data.txt screen no
+
+# -------------------------
+# Rigid water geometry
+# -------------------------
+fix 1 all shake 1e-6 200 0 b 1 a 1
+
+# -------------------------
+# NPT quench: temperature gradually lowered from 220 K → 100 K
+# -------------------------
+fix 4 all npt temp ${temp_initial} ${temp_final} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+# Run the quench
+run ${step_after_quench}
+
+# Remove NPT fix and thermo printing after quench
+unfix 4
+unfix 44
+
+# Save the structure immediately after quench
+write_data after_quench_${temp_final}.data nocoeff
+
+# -------------------------
+# Reinitialize thermo variables for post-quench equilibration
+# -------------------------
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+variable pe_sim equal pe
+
+# Print post-quench thermodynamics to a separate file
+fix 44 all print 10000 "${step_sim} ${press_sim} ${density_sim} ${pe_sim}" file after_quench_equilibration_data.txt screen no
+
+# -------------------------
+# NPT equilibration at constant 100 K
+# -------------------------
+fix 4 all npt temp ${temp_final} ${temp_final} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+run ${step_quench}
+
+# Remove NPT fix and thermo printing after equilibration
+unfix 4
+unfix 44
+
+# -------------------------
+# Save the fully equilibrated amorphous ice structure
+# -------------------------
+write_data equilibration_after_quench_${temp_final}K.data nocoeff

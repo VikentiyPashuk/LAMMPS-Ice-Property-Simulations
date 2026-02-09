@@ -1,0 +1,113 @@
+# ============================================================
+#  LAMMPS version: 2 Aug 2023 (Update 3)
+#  ReaxFF Relaxation and Dynamics of Water
+#
+#  Workflow:
+#   1) NPT relaxation at 273 K
+#   2) NVT production run
+#   3) Oxygen MSD analysis
+# ============================================================
+
+# -------------------------
+# User-defined variables
+# -------------------------
+variable solid_water_temp equal 273        # Target amorphous ice temperature (K)
+variable dt equal 0.25                     # Timestep (fs)
+variable tempDamp equal ${dt}*100.0        # Thermostat damping (fs)
+variable pressure equal 0                 # Target pressure (atm)
+variable pressureDamp equal ${dt}*1000.0  # Barostat damping (fs) = 1 ps
+variable seed equal 385938                 # RNG seed (not used here but kept for reproducibility)
+
+# -------------------------
+# LAMMPS setup
+# -------------------------
+units       real
+atom_style  full
+
+read_data   reaxff_amorphous_glass_${solid_water_temp}K.data  # Starting amorphous ice structure borrow from a TIP4P/Ice simulation at the temperature
+
+variable out_freq_thermo equal 1000      # Thermodynamic output frequency
+
+timestep    ${dt}
+
+neighbor 2.0 bin                         # Neighbor skin and binning
+neigh_modify delay 2 every 1
+
+# -------------------------
+# Atom groups
+# -------------------------
+group ox type 2                          # Oxygen atoms
+group hy type 1                          # Hydrogen atoms
+
+# -------------------------
+# ReaxFF requires neutral initial charges
+# -------------------------
+set group ox charge 0.0
+set group hy charge 0.0
+
+# -------------------------
+# ReaxFF force field
+# -------------------------
+pair_style  reax/c NULL checkqeq yes
+pair_coeff  * * albitereax.ff.txt H O
+fix 21 all qeq/reax 1 0.0 10.0 1.0e-6 reax/c
+
+reset_timestep 0
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+variable pe_sim equal pe
+
+# Write NPT thermodynamic data
+fix 44 all print 1000 "${step_sim} ${press_sim} ${density_sim} ${pe_sim}" file amorphous_solid_water_${solid_water_temp}K.txt screen no
+
+# -------------------------
+# NPT relaxation at 273 K
+# -------------------------
+fix 4 all npt temp ${solid_water_temp} ${solid_water_temp} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+# 0.375 ns
+run 1500000
+
+unfix 4
+unfix 44
+
+# -------------------------
+# NVT production run
+# -------------------------
+fix 4 all nvt temp ${solid_water_temp} ${solid_water_temp} ${tempDamp}
+
+# -------------------------
+# Mean-squared displacement of oxygen
+# -------------------------
+compute myMSD ox msd
+fix 22 ox ave/time 1000 1 1000 c_myMSD file MSD_reaxff_oxygen_${solid_water_temp}K.txt mode vector
+
+# -------------------------
+# Output during NVT
+# -------------------------
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+variable pe_sim equal pe
+
+fix 44 all print 1000 "${step_sim} ${press_sim} ${density_sim} ${pe_sim}" file nvt_amorphous_solid_water_${solid_water_temp}K.txt screen no
+
+# 0.500 ns
+run 2000000
+
+unfix 4
+unfix 22
+unfix 44
+
+# -------------------------
+# Final structure
+# -------------------------
+write_data reaxff_amorphous_glass_${solid_water_temp}K.data nocoeff

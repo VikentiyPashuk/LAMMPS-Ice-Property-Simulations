@@ -1,0 +1,105 @@
+# ============================================================
+#  ReaxFF Quenching of Amorphous Water/Ice
+#  LAMMPS version: 2 Aug 2023 (Update 3)
+#  Target temperature: 100 K
+#
+#  Workflow:
+#   1) NPT quench from 245 K → 100 K
+#   2) NPT post-quench equilibration
+#   3) Save final equilibrated structure
+# ============================================================
+
+# -------------------------
+# User-defined variables
+# -------------------------
+variable temp_initial equal 245             # Starting temperature before quench (K)
+variable temp_final equal 100               # Target temperature after quench (K)
+variable dt equal 0.25                      # Timestep (fs)
+variable step_quench equal 320000           # Steps for quench run (80 ps)
+variable step_after_quench equal 1000000    # Steps for post-quench equilibration (200 ps)
+variable tempDamp equal ${dt}*100.0        # Thermostat damping (fs)
+variable pressure equal 0                   # Target pressure (atm)
+variable pressureDamp equal ${dt}*1000.0   # Barostat damping (fs) = 1 ps
+variable seed equal 385938                  # Random seed for velocities
+
+# -------------------------
+# LAMMPS setup
+# -------------------------
+units real
+atom_style full
+
+# Read the initial amorphous ice configuration at 245 K
+read_data reaxff_amorphous_glass_245K.data
+
+variable out_freq_thermo equal 1000        # Thermodynamic output frequency
+variable out_freq_dump equal 100           # Dump frequency (not used here)
+
+timestep ${dt}
+
+neighbor 2.0 bin                           # Neighbor list cutoff and binning
+neigh_modify delay 2 every 1               # Neighbor list update frequency
+
+# -------------------------
+# ReaxFF force field
+# -------------------------
+pair_style reax/c NULL checkqeq yes
+pair_coeff * * albitereax.ff.txt H O
+fix 21 all qeq/reax 1 0.0 10.0 1.0e-6 reax/c   # Charge equilibration fix
+
+reset_timestep 0
+
+# -------------------------
+# Thermodynamic output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+# Variables for convenience in printing
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+variable pe_sim equal pe
+
+# Print key thermodynamic quantities during quench
+fix 44 all print 10000 "${step_sim} ${press_sim} ${density_sim} ${pe_sim}" file reaxff_quench_data.txt screen no
+
+# -------------------------
+# NPT Quench: gradually cool system from 245 K → 100 K
+# -------------------------
+fix 4 all npt temp ${temp_initial} ${temp_final} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+run ${step_quench}
+
+# Remove NPT and print fixes after quench
+unfix 4
+unfix 44
+
+# Save configuration immediately after quench
+write_data reaxff_after_quench_80ps_${temp_final}K.data nocoeff
+
+# -------------------------
+# Reset variables for post-quench equilibration
+# -------------------------
+variable step_sim equal step
+variable press_sim equal press
+variable density_sim equal density
+variable pe_sim equal pe
+
+# Print thermodynamics during post-quench equilibration
+fix 44 all print 10000 "${step_sim} ${press_sim} ${density_sim} ${pe_sim}" file reaxff_after_quench_equilibration_data.txt screen no
+
+# -------------------------
+# NPT equilibration at constant 100 K
+# -------------------------
+fix 4 all npt temp ${temp_final} ${temp_final} ${tempDamp} iso ${pressure} ${pressure} ${pressureDamp}
+
+run ${step_after_quench}
+
+# Remove fixes after equilibration
+unfix 4
+unfix 44
+
+# -------------------------
+# Save final equilibrated amorphous ice structure
+# -------------------------
+write_data reaxff_equilibration_after_quench_${temp_final}K.data nocoeff

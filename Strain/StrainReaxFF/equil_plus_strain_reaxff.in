@@ -1,0 +1,123 @@
+# ============================================================
+# LAMMPS input script for ReaxFF ice equilibration and uniaxial deformation
+# Purpose: 
+#   1. Equilibrate ReaxFF ice crystal at 264 K.
+#   2. Apply uniaxial tensile deformation in y-direction.
+# LAMMPS version: 2 Aug 2023 (Update 3)
+# Units: real (kcal/mol, fs, Angstroms, atm)
+# ============================================================
+
+# -------------------------
+# Simulation variables
+# -------------------------
+variable temperature equal 264         # Target temperature (K)
+variable dt equal 0.25                 # Time step (fs)
+variable tempDamp equal ${dt}*100.0   # Thermostat damping
+variable pressure equal 0              # Target pressure (atm)
+variable pressureDamp equal ${dt}*1000.0 # Barostat damping (1 ps)
+variable seed equal 385938             # Random seed for velocities
+
+# -------------------------
+# Initialize simulation
+# -------------------------
+units real
+atom_style full
+read_data reaxff_crystal_ice.data     # Load initial ReaxFF ice configuration
+
+# -------------------------
+# Energy minimization
+# -------------------------
+min_style cg
+minimize 1e-8 1e-8 100000 100000      # Conjugate gradient minimization
+
+# -------------------------
+# Output frequency variables
+# -------------------------
+variable out_freq_thermo equal 10000
+variable out_freq_dump equal 100000
+
+timestep ${dt}
+
+# -------------------------
+# Neighbor list settings
+# -------------------------
+neighbor 2.0 bin
+neigh_modify every 2 delay 2 check yes
+
+# -------------------------
+# ReaxFF potential
+# -------------------------
+pair_style reax/c NULL checkqeq yes
+pair_coeff * * albitereax.ff.txt H O
+fix 21 all qeq/reax 1 0.0 10.0 1.0e-6 reax/c  # Charge equilibration
+
+reset_timestep 0
+
+# -------------------------
+# Thermo output
+# -------------------------
+thermo ${out_freq_thermo}
+thermo_style custom step temp pe etotal epair emol press lx ly lz vol density pxx pyy pzz pxy pxz pyz
+
+# -------------------------
+# NPT equilibration
+# -------------------------
+fix 4 all npt temp ${temperature} ${temperature} ${tempDamp} aniso ${pressure} ${pressure} ${pressureDamp}
+
+velocity all create ${temperature} ${seed} dist gaussian  # Initialize velocities
+
+run 100000   # Equilibrate system (25 ps)
+
+unfix 4       # Remove NPT fix after equilibration
+
+# -------------------------
+# Deformation setup
+# -------------------------
+variable n_iter equal 16000000        # Number of deformation steps (4 ns)
+
+reset_timestep 0
+
+# Store initial cell length along y for strain calculations
+variable tmp equal "ly"
+variable L0 equal ${tmp}
+print "Initial Length, L0: ${L0}"
+
+compute peratom all pe/atom              # Per-atom potential energy
+
+# -------------------------
+# DEFORMATION
+# -------------------------
+# Fix temperature and pressures in x and z, allow deformation along y
+fix 2 all npt temp ${temperature} ${temperature} ${tempDamp} x 0 0 ${pressureDamp} z 0 0 ${pressureDamp}
+
+# Define strain rate
+variable srate equal 5.0e7
+variable srate1 equal "v_srate/1.0e15"  # Convert to LAMMPS units (Angstrom/fs)
+
+# Apply uniaxial deformation in y-direction
+fix 3 all deform 1 y erate ${srate1} units box remap v
+
+# -------------------------
+# Output strain and stress to file
+# -------------------------
+# Convert pressure from atm to GPa: 1 atm = 1/10132.5 GPa
+variable strain equal "(ly- v_L0)/v_L0"
+variable p1 equal "v_strain"
+variable p2 equal "-pxx/10132.5"
+variable p3 equal "-pyy/10132.5"
+variable p4 equal "-pzz/10132.5"
+
+fix def1 all print 10 "${p1} ${p2} ${p3} ${p4}" file genice_tens_albite_reaxff_${temperature}.txt screen no
+
+# -------------------------
+# Thermo display during deformation
+# -------------------------
+thermo 1000
+thermo_style custom step v_strain temp v_p2 v_p3 v_p4 ke pe press
+
+run ${n_iter}   # Perform deformation
+
+# -------------------------
+# Simulation finished
+# -------------------------
+print "All done"
